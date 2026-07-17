@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.USERNAME.wecom-claude-bridge</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/ABSOLUTE/PATH/TO/node</string>
+    <string>src/index.js</string>
+  </array>
+  <key>WorkingDirectory</key><string>/ABSOLUTE/PATH/TO/wecom-claude-bridge</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>/ABSOLUTE/PATH/TO/node-bin-dir:/usr/local/bin:/usr/bin:/bin</string>
+    <key>HOME</key><string>/Users/USERNAME</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key><string>/Users/USERNAME/Library/Logs/wecom-claude-bridge.log</string>
+  <key>StandardErrorPath</key><string>/Users/USERNAME/Library/Logs/wecom-claude-bridge.log</string>
+</dict>
+</plist>
