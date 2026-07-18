@@ -1,4 +1,5 @@
 import spawn from 'cross-spawn'; // Windows 下 claude 是 .cmd，原生 spawn 会 EINVAL
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadSessions, saveSessions } from './store.js';
@@ -34,7 +35,20 @@ export function sessionInfo(chatId, isOwner = false) {
   ].join('\n');
 }
 
+// Claude 被禁止自写 .claude 目录，agent 沉淀的技能先落 workspace/skills，
+// 每次调用前由桥接同步到 .claude/skills 供 CLI 自动加载
+function syncSkills() {
+  const src = path.join(WORKSPACE_DIR, 'skills');
+  const dest = path.join(WORKSPACE_DIR, '.claude', 'skills');
+  try {
+    if (fs.existsSync(src)) fs.cpSync(src, dest, { recursive: true });
+  } catch (e) {
+    console.error('[skills-sync]', e?.message ?? e);
+  }
+}
+
 export function runClaude(chatId, prompt, isOwner = false, extraTools = []) {
+  syncSkills();
   // 提示词走 stdin：--allowedTools 等可变参数选项会吞掉后置的位置参数
   const args = ['-p', '--output-format', 'json'];
   if (sessions[chatId]) args.push('--resume', sessions[chatId]);

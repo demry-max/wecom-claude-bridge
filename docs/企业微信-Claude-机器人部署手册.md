@@ -38,7 +38,7 @@ WECOM_AES_KEY=
 PORT=3979
 CALLBACK_PATH=/wecom/callback
 
-ALLOWED_TOOLS=Read,Grep,Glob,WebSearch,WebFetch   # owner 可用工具
+ALLOWED_TOOLS=Read,Grep,Glob,WebSearch,WebFetch,Write(./memory/**),Edit(./memory/**),Write(./skills/**),Edit(./skills/**)   # owner 可用工具（含记忆/技能落盘）
 NON_OWNER_TOOLS=WebSearch,WebFetch                # 其他成员可用工具
 CLAUDE_MODEL=                                     # 留空=默认；可填 haiku/sonnet/opus
 CLAUDE_TIMEOUT_MS=300000
@@ -54,6 +54,14 @@ workspace/
 bridge.log
 .DS_Store
 ```
+
+## 步骤 2b：写入 Agent 工作区（长期记忆 + 技能沉淀）
+
+```bash
+mkdir -p workspace/memory workspace/skills
+```
+
+写入 `workspace/CLAUDE.md` 与 `workspace/memory/MEMORY.md`——内容从本仓库对应文件原样复制（[workspace/CLAUDE.md](../workspace/CLAUDE.md)、[workspace/memory/MEMORY.md](../workspace/memory/MEMORY.md)；git clone 部署则已自带）。作用：机器人获得跨会话长期记忆（对它说「记住…」自动落盘）与技能自动沉淀（说「存成技能」自动生成 SKILL.md，桥接会同步到 .claude/skills 供后续会话加载）。
 
 ## 步骤 3：写入 `src/store.js` 与 `src/claude.js`
 
