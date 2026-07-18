@@ -42,6 +42,7 @@ ALLOWED_TOOLS=Read,Grep,Glob,WebSearch,WebFetch,Write(./memory/**),Edit(./memory
 NON_OWNER_TOOLS=WebSearch,WebFetch                # 其他成员可用工具
 CLAUDE_MODEL=                                     # 留空=默认；可填 haiku/sonnet/opus
 CLAUDE_TIMEOUT_MS=300000
+CLAUDE_EFFORT=          # 思考深度 low/medium/high/xhigh/max，留空=默认
 ```
 
 `.gitignore`：

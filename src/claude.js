@@ -15,6 +15,8 @@ const ALLOWED_TOOLS =
 const NON_OWNER_TOOLS = process.env.NON_OWNER_TOOLS ?? 'WebSearch,WebFetch';
 const CLAUDE_TIMEOUT_MS = Number(process.env.CLAUDE_TIMEOUT_MS || 300_000);
 const CLAUDE_MODEL = process.env.CLAUDE_MODEL || '';
+// 思考深度：low/medium/high/xhigh/max，留空=CLI 默认
+const CLAUDE_EFFORT = process.env.CLAUDE_EFFORT || '';
 
 const sessions = loadSessions(); // { [chatId]: sessionId }
 
@@ -57,6 +59,7 @@ export function runClaude(chatId, prompt, isOwner = false, extraTools = []) {
     .join(',');
   if (tools) args.push('--allowedTools', tools);
   if (CLAUDE_MODEL) args.push('--model', CLAUDE_MODEL);
+  if (CLAUDE_EFFORT) args.push('--effort', CLAUDE_EFFORT);
 
   return new Promise((resolve, reject) => {
     const child = spawn(CLAUDE_BIN, args, {
