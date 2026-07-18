@@ -18,6 +18,24 @@
 - 💰 **用订阅不用 API Key**：`claude -p` 无头模式调用本机 Claude Code 登录态
 - 🖥️ **macOS + Windows**（cross-spawn 兼容 `.cmd`）
 
+## 🗂️ Agent 工作区（Hermes 式记忆与技能）
+
+机器人不只是问答机——`workspace/` 是它的常驻工作区，自带长期记忆与技能沉淀：
+
+```
+workspace/
+├── CLAUDE.md          # 人格与行为协议（每次调用自动加载）
+├── memory/            # 长期记忆：一条记忆 = 一个 md 文件
+│   └── MEMORY.md      # 记忆索引，经 @import 每次对话自动注入
+└── skills/            # 沉淀的技能，桥接自动同步到 .claude/skills 生效
+```
+
+- 对它说「**记住**：下周三去马尼拉出差」→ 自动写入 `memory/` 并更新索引，**跨会话、跨聊天窗口**持续生效（新会话即时可见，进行中的老会话 `/new` 后加载）
+- 教它一个流程后说「**存成技能**」→ 自动生成 `skills/<name>/SKILL.md`，之后所有会话自动加载、匹配场景自动遵循
+- 问「**你会哪些技能**」→ 随时盘点技能清单
+- 安全边界：写权限**仅限** `memory/` 与 `skills/` 两个目录（Claude Code 本身禁止 agent 自写 `.claude` 配置目录，技能由桥接代码复制同步），且协议明确禁止把密码/密钥写入记忆
+
+
 ## 快速开始
 
 **1. 企业微信后台配置**（[work.weixin.qq.com](https://work.weixin.qq.com/) 管理后台 → 应用管理 → 创建**自建应用**）：
