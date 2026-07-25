@@ -34,6 +34,8 @@ export function sessionInfo(chatId, isOwner = false) {
     `- Claude session: ${sid ? `\`${sid}\`` : '（无，下一条消息将新建）'}`,
     `- 工作目录: \`${WORKSPACE_DIR}\``,
     `- 你的身份: ${isOwner ? 'owner' : '普通成员'}`,
+    `- 模型: ${CLAUDE_MODEL || '（CLI 默认）'}`,
+    `- 思考深度: ${CLAUDE_EFFORT || '（CLI 默认）'}`,
     `- 允许工具: ${tools || '（无）'}`,
   ].join('\n');
 }
@@ -50,6 +52,26 @@ function syncSkills() {
   }
 }
 
+// 模型对自身身份的自述不可靠（无头模式无人告知它跑在哪个模型上，它会凭训练记忆瞎猜）。
+// 由桥接把真实配置写进工作区，CLAUDE.md 用 @runtime.md 引入，问到时以此为准。
+function writeRuntimeInfo() {
+  try {
+    fs.writeFileSync(
+      path.join(WORKSPACE_DIR, 'runtime.md'),
+      [
+        '# 当前运行配置（桥接自动生成，权威来源）',
+        '',
+        `- 模型：${CLAUDE_MODEL || '（未指定，走 claude CLI 默认）'}`,
+        `- 思考深度 effort：${CLAUDE_EFFORT || '（未指定，走 CLI 默认）'}`,
+        '',
+        '用户问「你用什么模型/什么档位」时，**以本文件为准**，不要凭自身记忆推测。',
+      ].join('\n') + '\n'
+    );
+  } catch (e) {
+    console.error('[runtime-info]', e?.message ?? e);
+  }
+}
+
 /**
  * 运行 claude 无头模式。onProgress 提供时走 stream-json 实时解析：
  * - 中间消息 = assistant 事件的 text 块；最终答案 = result 事件的 result 字段。
@@ -59,6 +81,7 @@ function syncSkills() {
  */
 export function runClaude(chatId, prompt, isOwner = false, extraTools = [], onProgress = null) {
   syncSkills();
+  writeRuntimeInfo();
   // 提示词走 stdin：--allowedTools 等可变参数选项会吞掉后置的位置参数
   const args = ['-p', '--output-format', 'stream-json', '--verbose'];
   if (sessions[chatId]) args.push('--resume', sessions[chatId]);
