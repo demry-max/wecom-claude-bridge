@@ -11,7 +11,7 @@
   <key>WorkingDirectory</key><string>/ABSOLUTE/PATH/TO/wecom-claude-bridge</string>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>PATH</key><string>/ABSOLUTE/PATH/TO/node-bin-dir:/usr/local/bin:/usr/bin:/bin</string>
+    <key>PATH</key><string>/ABSOLUTE/PATH/TO/node-bin-dir:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
     <key>HOME</key><string>/Users/USERNAME</string>
   </dict>
   <key>RunAtLoad</key><true/>

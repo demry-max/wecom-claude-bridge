@@ -43,6 +43,7 @@ NON_OWNER_TOOLS=WebSearch,WebFetch                # 其他成员可用工具
 CLAUDE_MODEL=                                     # 留空=默认；可填 haiku/sonnet/opus
 CLAUDE_TIMEOUT_MS=300000
 CLAUDE_EFFORT=          # 思考深度 low/medium/high/xhigh/max，留空=默认
+FFMPEG_BIN=             # 语音转写用；建议填绝对路径如 /opt/homebrew/bin/ffmpeg
 ```
 
 `.gitignore`：
