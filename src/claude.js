@@ -54,8 +54,10 @@ function syncSkills() {
 
 // 模型对自身身份的自述不可靠（无头模式无人告知它跑在哪个模型上，它会凭训练记忆瞎猜）。
 // 由桥接把真实配置写进工作区，CLAUDE.md 用 @runtime.md 引入，问到时以此为准。
-function writeRuntimeInfo() {
+function writeRuntimeInfo(chatId) {
   try {
+    // 定时任务用的是 sched: 前缀的伪会话，不是真实飞书会话，不写入
+    const realChat = typeof chatId === 'string' && !chatId.startsWith('sched:') ? chatId : null;
     fs.writeFileSync(
       path.join(WORKSPACE_DIR, 'runtime.md'),
       [
@@ -63,8 +65,10 @@ function writeRuntimeInfo() {
         '',
         `- 模型：${CLAUDE_MODEL || '（未指定，走 claude CLI 默认）'}`,
         `- 思考深度 effort：${CLAUDE_EFFORT || '（未指定，走 CLI 默认）'}`,
+        `- 当前会话 chat_id：${realChat ?? '（本次为定时任务，无会话）'}`,
         '',
         '用户问「你用什么模型/什么档位」时，**以本文件为准**，不要凭自身记忆推测。',
+        '创建定时任务时，`chat_id` 直接用上面这个值。',
       ].join('\n') + '\n'
     );
   } catch (e) {
@@ -81,7 +85,7 @@ function writeRuntimeInfo() {
  */
 export function runClaude(chatId, prompt, isOwner = false, extraTools = [], onProgress = null) {
   syncSkills();
-  writeRuntimeInfo();
+  writeRuntimeInfo(chatId);
   // 提示词走 stdin：--allowedTools 等可变参数选项会吞掉后置的位置参数
   const args = ['-p', '--output-format', 'stream-json', '--verbose'];
   if (sessions[chatId]) args.push('--resume', sessions[chatId]);

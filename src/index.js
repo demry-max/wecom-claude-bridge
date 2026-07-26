@@ -6,6 +6,7 @@ import { XMLParser } from 'fast-xml-parser';
 import { getSignature, decrypt } from './wxcrypt.js';
 import { runClaude, resetSession, sessionInfo, WORKSPACE_DIR } from './claude.js';
 import { loadOwner, saveOwner } from './store.js';
+import { startScheduler } from './scheduler.js';
 
 const CORP_ID = process.env.WECOM_CORP_ID;
 const AGENT_ID = process.env.WECOM_AGENT_ID;
@@ -227,6 +228,25 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   res.writeHead(405).end();
+});
+
+// ---- 定时任务：到点跑 Claude，把结果主动发给对应成员 ----
+// 企业微信是单聊模型，任务文件里的 chat_id 即成员 UserID
+startScheduler({
+  schedulesDir: path.join(WORKSPACE_DIR, 'schedules'),
+  stateFile: path.join(WORKSPACE_DIR, '..', 'data', 'schedule-state.json'),
+  onFire: async (job) => {
+    const touser = job.chat_id;
+    if (!touser) {
+      console.error(`[sched] 任务「${job.name ?? job._file}」缺 chat_id（企业微信 UserID），跳过`);
+      return;
+    }
+    // 定时任务用独立会话上下文，避免污染用户正在进行的对话
+    const answer = await runClaude(`sched:${job._file}`, job.prompt, true, [], (p) =>
+      send(touser, `⏳ ${p}`)
+    );
+    await send(touser, `⏰ ${job.name ?? '定时任务'}\n\n${answer || '（无输出）'}`);
+  },
 });
 
 server.listen(PORT, () => {

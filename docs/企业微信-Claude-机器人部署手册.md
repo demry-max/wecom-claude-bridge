@@ -22,7 +22,7 @@ mkdir -p ~/wecom-claude-bridge/src ~/wecom-claude-bridge/scripts/windows ~/wecom
 cd ~/wecom-claude-bridge
 npm init -y
 npm pkg set type=module scripts.start="node src/index.js"
-npm install fast-xml-parser dotenv cross-spawn
+npm install fast-xml-parser dotenv cross-spawn cron-parser
 ```
 
 ## 步骤 2：写入 `.env` 与 `.gitignore`
@@ -38,7 +38,7 @@ WECOM_AES_KEY=
 PORT=3979
 CALLBACK_PATH=/wecom/callback
 
-ALLOWED_TOOLS=Read,Grep,Glob,WebSearch,WebFetch,Write(./memory/**),Edit(./memory/**),Write(./skills/**),Edit(./skills/**)   # owner 可用工具（含记忆/技能落盘）
+ALLOWED_TOOLS=Read,Grep,Glob,WebSearch,WebFetch,Write(./memory/**),Edit(./memory/**),Write(./skills/**),Edit(./skills/**),Write(./schedules/**),Edit(./schedules/**)   # owner 可用工具（含记忆/技能落盘）
 NON_OWNER_TOOLS=WebSearch,WebFetch                # 其他成员可用工具
 CLAUDE_MODEL=                                     # 留空=默认；可填 haiku/sonnet/opus
 CLAUDE_TIMEOUT_MS=300000
@@ -125,3 +125,5 @@ cloudflared tunnel --url http://localhost:3979
 | 无响应 | 查服务日志；确认签名校验未报错；免费隧道域名重启后会变，需回后台更新 |
 | 提示登录过期 | 主机终端 `claude /login`；根治：`claude setup-token` 长期令牌写入 `.env` 的 `CLAUDE_CODE_OAUTH_TOKEN=` |
 | 安全红线 | `.env` 不入库不外发；不给无人值守机器人开 Write/Bash；不用 `--dangerously-skip-permissions` |
+
+> **定时任务**：本仓库的 `src/scheduler.js` 也需一并写入（从仓库原样复制），并在 `src/index.js` 末尾接线；机器人把任务定义写进 `workspace/schedules/*.json`，桥接到点执行——**不要给机器人 Bash 权限**。
