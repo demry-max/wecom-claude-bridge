@@ -23,7 +23,8 @@ function readJobs(dir) {
     try {
       const job = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
       job._file = f;
-      if (job.enabled !== false && job.when && job.prompt) jobs.push(job);
+      // prompt 型（跑 Claude）或 action 型（如切模型）任一即可
+      if (job.enabled !== false && job.when && (job.prompt || job.action)) jobs.push(job);
     } catch (e) {
       console.error(`[sched] 任务文件解析失败 ${f}:`, e?.message ?? e);
     }

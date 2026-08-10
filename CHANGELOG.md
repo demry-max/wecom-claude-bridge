@@ -2,6 +2,20 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.4.0] - 2026-08-10
+
+### 新增
+- **`/model` 指令**：在聊天里直接查看/切换模型与思考档，如 `/model fable high`、`/model opus xhigh`、
+  `/model high`（只改档位）。**立即生效、无需重启**，并同步回写 `.env` 让重启后保持。仅 owner 可用，
+  取值走白名单校验（模型名格式 + `low/medium/high/xhigh/max`）。
+- **定时切换模型**：定时任务支持 `"action": "set-model"`，配 `model` / `effort` 字段即可按 cron 或
+  一次性时间自动切档，例如工作日早八点自动切回便宜档位。
+
+### 修复
+- **模型配置此前必须重启才能生效**：`CLAUDE_MODEL` / `CLAUDE_EFFORT` 从模块加载时的常量改为运行时变量。
+- **弃用外部定时脚本**：原先靠 macOS launchd 拉起 shell 脚本改配置，在外置卷（exFAT）上会被系统拦下
+  （`Operation not permitted`，TCC 层面），定时切换静默失败。现由桥接自身的调度器执行，不再依赖 launchd。
+
 ## [1.1.0] - 2026-07-26
 
 首次公开发布（1.0.0）之后累积的功能与修复。
