@@ -86,6 +86,24 @@ export function setRuntimeConfig({ model, effort } = {}) {
   if (Object.keys(updates).length) patchEnvFile(updates);
   return getRuntimeConfig();
 }
+// 上下文接近压缩点时提醒机器人先固化记忆的阈值（0 = 关闭）
+const CONTEXT_NUDGE_TOKENS = Number(process.env.CONTEXT_NUDGE_TOKENS ?? 850_000);
+const contextSize = new Map();  // chatId → 最近一轮喂入的上下文规模
+const nudgePending = new Set(); // 待注入提醒的会话
+
+export function getContextTokens(chatId) {
+  return contextSize.get(chatId) ?? 0;
+}
+export function getNudgeThreshold() {
+  return CONTEXT_NUDGE_TOKENS;
+}
+// 有待提醒则返回 true 并清位（取走即消费，保证只注入一次）
+export function consumeMemoryNudge(chatId) {
+  if (!nudgePending.has(chatId)) return false;
+  nudgePending.delete(chatId);
+  return true;
+}
+
 // 飞书文档/多维表格工具开关（默认开；仅 owner 生效，权限由飞书后台 scope 决定）
 const FEISHU_TOOLS = process.env.FEISHU_TOOLS !== 'false';
 
@@ -123,6 +141,7 @@ export function sessionInfo(chatId, isOwner = false) {
     `- 你的身份: ${isOwner ? 'owner' : '普通成员'}`,
     `- 模型: ${CLAUDE_MODEL || '（CLI 默认）'}`,
     `- 思考深度: ${CLAUDE_EFFORT || '（CLI 默认）'}`,
+    `- 上下文: ${(contextSize.get(chatId) ?? 0).toLocaleString()} tokens${CONTEXT_NUDGE_TOKENS > 0 ? ` / 固化提醒阈值 ${CONTEXT_NUDGE_TOKENS.toLocaleString()}` : ''}`,
     `- 允许工具: ${tools || '（无）'}`,
   ].join('\n');
 }
@@ -256,6 +275,17 @@ export function runClaude(chatId, prompt, isOwner = false, extraTools = [], onPr
         if (d.session_id) {
           sessions[chatId] = d.session_id;
           saveSessions(sessions);
+        }
+        // 记录本轮喂入的上下文规模；接近压缩点则置位，下一轮提醒固化记忆
+        const u = d.usage ?? {};
+        const ctx =
+          (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
+        if (ctx > 0) {
+          contextSize.set(chatId, ctx);
+          if (CONTEXT_NUDGE_TOKENS > 0 && ctx >= CONTEXT_NUDGE_TOKENS) {
+            nudgePending.add(chatId);
+            console.log(`[context] ${chatId} 上下文 ${ctx.toLocaleString()} ≥ 阈值，下一轮将提醒固化记忆`);
+          }
         }
         if (d.is_error) {
           finalErr = new Error(String(d.result ?? 'unknown error').slice(0, 500));

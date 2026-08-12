@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { XMLParser } from 'fast-xml-parser';
 import { getSignature, decrypt } from './wxcrypt.js';
-import { runClaude, resetSession, sessionInfo, WORKSPACE_DIR , getRuntimeConfig, setRuntimeConfig, MODEL_ALIASES, EFFORT_LEVELS } from './claude.js';
+import { runClaude, resetSession, sessionInfo, WORKSPACE_DIR , getRuntimeConfig, setRuntimeConfig, MODEL_ALIASES, EFFORT_LEVELS, consumeMemoryNudge } from './claude.js';
 import { loadOwner, saveOwner } from './store.js';
 import { startScheduler } from './scheduler.js';
 
@@ -164,10 +164,19 @@ async function handleMessage(m) {
 
   const extraTools = built.attachments.length ? ['Read(./incoming/**)'] : [];
 
+  // 上下文接近压缩点：提醒机器人先固化记忆（仅 owner——只有 owner 有 memory 写权限）
+  let prompt = text;
+  if (isOwner && consumeMemoryNudge(chatId)) {
+    prompt +=
+      '\n\n（系统提示：本会话上下文接近上限，即将被自动压缩。压缩只影响对话历史，不影响 memory/ 文件。' +
+      '请先检查这段对话里有哪些值得长期保留的事实、决定、偏好还没写进 memory/，有就现在写入并更新 MEMORY.md 索引；' +
+      '没有就忽略本提示，正常回答用户的问题。不要因为这条提示改变回答的语气或结构。）';
+  }
+
   enqueue(chatId, async () => {
     console.log(`[msg] ${isOwner ? 'owner' : userId} [${m.MsgType}]: ${text.slice(0, 80)}`);
     try {
-      const answer = await runClaude(chatId, text, isOwner, extraTools);
+      const answer = await runClaude(chatId, prompt, isOwner, extraTools);
       await send(userId, answer || '（Claude 返回了空回复）');
     } catch (e) {
       console.error('[claude]', e);
