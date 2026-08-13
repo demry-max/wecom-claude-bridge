@@ -169,7 +169,7 @@ async function handleMessage(m) {
   if (isOwner && consumeMemoryNudge(chatId)) {
     prompt +=
       '\n\n（系统提示：本会话上下文接近上限，即将被自动压缩。压缩只影响对话历史，不影响 memory/ 文件。' +
-      '请先检查这段对话里有哪些值得长期保留的事实、决定、偏好还没写进 memory/，有就现在写入并更新 MEMORY.md 索引；' +
+      '请先检查这段对话里有哪些值得长期保留的事实、决定、偏好还没写进 memory/——稳定偏好就地合入 USER.md，长期事实建独立文件并更新 MEMORY.md 索引，过程细节追加进 memory/journal/ 当日文件；' +
       '没有就忽略本提示，正常回答用户的问题。不要因为这条提示改变回答的语气或结构。）';
   }
 

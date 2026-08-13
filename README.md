@@ -1,6 +1,6 @@
 # wecom-claude-bridge
 
-[![version](https://img.shields.io/badge/version-1.5.0-blue)](CHANGELOG.md) [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![version](https://img.shields.io/badge/version-1.6.0-blue)](CHANGELOG.md) [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 **把 Claude Code 接进企业微信** —— 在企业微信里给自建应用发消息，让 Claude 回答问题、看图片、读文件，并保持上下文连续。
 
@@ -15,7 +15,7 @@
 - 🧠 **会话记忆**：每个用户映射一个 Claude session（`--resume` 续聊）；`/new` 重开，`/status` 查看
 - 🧷 **压缩前固化记忆**：上下文接近上限时自动提醒机器人把该留的写进 `memory/`，避免自动压缩后细节流失
 - 🔀 **模型随时切换**：`/model fable high` 一句话切换模型与思考档，立即生效无需重启；也可设定时自动切换（如早八点切回便宜档）
-- 🗂️ **Agent 工作区**：workspace 内置 CLAUDE.md 人格 + `memory/` 长期记忆（说「记住…」自动落盘、跨会话生效）+ `skills/` 技能沉淀（说「存成技能」自动生成 SKILL.md 并在后续会话自动加载）
+- 🗂️ **Agent 工作区**：workspace 内置 CLAUDE.md 人格 + `memory/` 三层长期记忆（画像 USER.md / 事实文件+索引 / journal 流水；纠正、决定、偏好主动落盘，不用等「记住」）+ `skills/` 技能沉淀（说「存成技能」自动生成 SKILL.md 并在后续会话自动加载）
 - ⏰ **定时任务（机器人自己排期）**：对它说「每天八点提醒我…」它就写一份任务定义到 `workspace/schedules/`，桥接到点执行并主动推送结果；支持 cron 表达式与一次性时间。**机器人始终没有 Bash/命令执行权限**——它只能写受限目录里的任务定义，执行由桥接负责
 - 🖼️ **消息类型**：文本 / 图片（Claude 直接看图）/ 文件 / 语音（需企业微信开启语音转文字，带 Recognition 字段时支持）
 - 🔐 **权限分级**：首个发消息者自动成为 owner（本机只读工具 + 联网）；其他成员仅联网检索
@@ -23,23 +23,27 @@
 - 💰 **用订阅不用 API Key**：`claude -p` 无头模式调用本机 Claude Code 登录态
 - 🖥️ **macOS + Windows**（cross-spawn 兼容 `.cmd`）
 
-## 🗂️ Agent 工作区（Hermes 式记忆与技能）
+## 🗂️ Agent 工作区（OpenClaw / Hermes 式三层记忆与技能）
 
-机器人不只是问答机——`workspace/` 是它的常驻工作区，自带长期记忆与技能沉淀：
+机器人不只是问答机——`workspace/` 是它的常驻工作区，自带三层长期记忆与技能沉淀（记忆架构借鉴 OpenClaw 与 Hermes Agent）：
 
 ```
 workspace/
 ├── CLAUDE.md          # 人格与行为协议（每次调用自动加载）
-├── memory/            # 长期记忆：一条记忆 = 一个 md 文件
-│   └── MEMORY.md      # 记忆索引，经 @import 每次对话自动注入
+├── memory/
+│   ├── USER.md        # 画像层：用户身份、偏好、沟通与判断风格——每次对话自动加载
+│   ├── MEMORY.md      # 事实层索引：一条长期事实一行，@import 自动注入
+│   ├── <slug>.md      # 事实层正文：一条记忆 = 一个文件，按需读取
+│   └── journal/       # 流水层：当日工作笔记（YYYY-MM-DD.md），Grep 检索、不占上下文
 └── skills/            # 沉淀的技能，桥接自动同步到 .claude/skills 生效
 ```
 
-- 对它说「**记住**：下周三去马尼拉出差」→ 自动写入 `memory/` 并更新索引，**跨会话、跨聊天窗口**持续生效（新会话即时可见，进行中的老会话 `/new` 后加载）
-- 教它一个流程后说「**存成技能**」→ 自动生成 `skills/<name>/SKILL.md`，之后所有会话自动加载、匹配场景自动遵循
-- 问「**你会哪些技能**」→ 随时盘点技能清单
-- 安全边界：写权限**仅限** `memory/` 与 `skills/` 两个目录（Claude Code 本身禁止 agent 自写 `.claude` 配置目录，技能由桥接代码复制同步），且协议明确禁止把密码/密钥写入记忆
-
+- **主动记忆**：不用等你说「记住」——你纠正它的结论、做出决定、表达偏好、给出数字口径时，它当场落盘；说「**记住**：下周三去马尼拉出差」当然也行
+- **supersede 不留矛盾**：事实变了就地改写并标注日期，绝不追加与旧条目矛盾的新条目；讲同一件事的文件会被合并成信息密度更高的版本
+- **每周整理（dreaming）**：对它说「建一个每周记忆整理任务」，它会自建定时任务：通读 7 天 journal、提炼入长期层、合并重复、修正过时并汇报
+- **压缩前固化**：上下文接近上限时自动提醒它把该留的写进记忆，避免自动压缩后细节流失
+- 教它一个流程后说「**存成技能**」→ 自动生成 `skills/<name>/SKILL.md`，之后所有会话自动加载、匹配场景自动遵循；问「**你会哪些技能**」随时盘点
+- 安全边界：写权限仅限 `memory/`、`skills/` 等受限目录（Claude Code 本身禁止 agent 自写 `.claude` 配置目录，技能由桥接代码复制同步），协议明确禁止把密码/密钥写入记忆
 
 ## 快速开始
 
