@@ -89,6 +89,13 @@ const NON_OWNER_TOOLS = process.env.NON_OWNER_TOOLS ?? 'WebSearch';
 // （实测 http://127.0.0.1:3000 会真的发起连接，错误信息即泄露端口可达性），
 // 也可把数据编码进 URL 外传。需要访客能读网页时用 GUEST_TOOLS 显式打开。
 const GUEST_TOOLS = process.env.GUEST_TOOLS ?? 'WebSearch';
+// 无论 env 怎么配，这些工具对访客永远不可用（env 只能在白名单里加别的，不能解开这些）
+const GUEST_HARD_DENY = [
+  'Bash', 'BashOutput', 'KillShell', 'Edit', 'Write', 'NotebookEdit', 'Task', 'Agent', 'Skill',
+  'SendMessage', 'Artifact', 'CronCreate', 'CronDelete', 'CronList', 'Workflow', 'ListAgents',
+  'RemoteTrigger', 'PushNotification', 'ScheduleWakeup', 'TaskCreate', 'TaskUpdate',
+  'DesignSync', 'EnterWorktree', 'ExitWorktree', 'Monitor',
+];
 // 黑名单保留作双保险（万一将来白名单被放宽，这些依然被显式拒绝）
 const GUEST_DENIED_TOOLS =
   process.env.GUEST_DENIED_TOOLS ??
@@ -306,6 +313,17 @@ function syncSkills() {
 // 定时任务与聊天是并发的两个 claude 进程、共享同一工作区，写文件必然互相覆盖，
 // 模型会读到别人的 chat_id（进而把排期发错会话）。逐次注入天然无竞态。
 function runtimeSystemPrompt(chatId, model, effort, isOwner) {
+  // 访客只需要知道自己跑在什么模型上；outbox、定时任务、chat_id 都是 owner 侧的概念，
+  // 讲给访客听既没用又会诱导它去尝试没有的能力
+  if (!isOwner) {
+    return [
+      '# 当前运行配置（由桥接注入，权威来源）',
+      `- 模型：${model || '（未指定，走 claude CLI 默认）'}`,
+      `- 思考深度 effort：${effort || '（未指定，走 CLI 默认）'}`,
+      '',
+      '被问到「你用什么模型/什么思考档位」时**以上面为准**，不要凭自身记忆推测。',
+    ].join('\n');
+  }
   const realChat = typeof chatId === 'string' && !chatId.startsWith('sched') ? chatId : null;
   const outboxRel = `./outbox/${safeKey(chatId)}/`;
   return [
@@ -370,13 +388,17 @@ export function buildClaudeArgs(chatId, isOwner = false, extraTools = [], opts =
     // 白名单：只有这些内置工具存在于访客的工具集里。
     // 访客发了图片/文件时才追加 Read，且路径由 allowedTools 的 Read(./incoming/**) 限定。
     const needsRead = extraTools.some((e) => e.startsWith('Read('));
-    const allowTools = GUEST_TOOLS.split(',').map((s) => s.trim()).filter(Boolean);
+    // 硬下限压过 env：GUEST_TOOLS 配错或被人放宽也解不开这些
+    const allowTools = GUEST_TOOLS.split(',')
+      .map((s) => s.trim())
+      .filter((x) => x && !GUEST_HARD_DENY.includes(x));
     if (needsRead && !allowTools.includes('Read')) allowTools.push('Read');
     args.push('--tools', allowTools.join(','));
-    // 双保险：白名单之外再显式拒绝一遍高危工具
-    const denied = GUEST_DENIED_TOOLS.split(',')
-      .map((s) => s.trim())
-      .filter((x) => x && !(x === 'Read' && needsRead));
+    // 双保险：白名单之外再显式拒绝一遍高危工具（硬下限并入，去重）
+    const denied = [...new Set([
+      ...GUEST_HARD_DENY,
+      ...GUEST_DENIED_TOOLS.split(',').map((s) => s.trim()).filter(Boolean),
+    ])].filter((x) => !(x === 'Read' && needsRead));
     args.push('--disallowedTools', denied.join(','));
     // 自动记忆按 git 仓库根归档，workspace 与 workspace-guest 同属一个仓库，
     // 不关就是与 owner 共用一份（读方向泄漏、写方向是持久化提示注入）。

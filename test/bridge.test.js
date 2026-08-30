@@ -60,6 +60,27 @@ describe('访客隔离（行为断言）', () => {
     assert.ok(guest.args.includes('--strict-mcp-config'));
   });
 
+  test('硬下限压过 env：把危险工具写进 GUEST_TOOLS 也解不开', async () => {
+    // 光验证默认配置不够——默认本来就安全。要验证的是「有人把 env 配宽了」的情况。
+    const prev = process.env.GUEST_TOOLS;
+    process.env.GUEST_TOOLS = 'WebSearch,Bash,Write,SendMessage';
+    const mod = await import(`../src/claude.js?hard=${Date.now()}`);
+    const a = mod.buildClaudeArgs('guest:x:y', false, []);
+    const tools = (a.args[a.args.indexOf('--tools') + 1] ?? '').split(',');
+    for (const bad of ['Bash', 'Write', 'SendMessage']) {
+      assert.ok(!tools.includes(bad), `${bad} 必须被硬下限挡掉，即使 env 里写了`);
+    }
+    assert.ok(tools.includes('WebSearch'), '正常工具仍应保留');
+    if (prev === undefined) delete process.env.GUEST_TOOLS; else process.env.GUEST_TOOLS = prev;
+  });
+
+  test('访客系统提示词不含 owner 侧概念（outbox/定时任务/chat_id）', () => {
+    const sys = argVal(guest.args, '--append-system-prompt') ?? '';
+    assert.ok(!sys.includes('outbox'), '访客没有回传能力，讲了只会诱导它尝试');
+    assert.ok(!/定时任务|chat_id/.test(sys));
+    assert.match(sys, /模型/, '模型信息仍要告诉它，否则会瞎猜');
+  });
+
   test('访客默认没有 WebFetch（可探测本机与内网）', () => {
     const tools = (argVal(guest.args, '--tools') ?? '').split(',');
     assert.ok(!tools.includes('WebFetch'), 'WebFetch 不限制目标地址，实测可连 127.0.0.1 探测端口');
