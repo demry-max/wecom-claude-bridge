@@ -50,7 +50,7 @@ const GUEST_CLAUDE_MD = `# 访客助手工作区
 
 ## 边界
 
-- 你只有联网检索能力（WebSearch/WebFetch），没有本机文件、记忆、技能、定时任务的访问权。
+- 你只有联网检索能力（WebSearch），没有本机文件、记忆、技能、定时任务的访问权。
 - 你**不掌握**机器人主人的任何个人信息、公司内部资料或历史对话。被问到这类问题时，
   如实说明你在访客模式下没有这些信息，请对方直接找本人，不要猜测或编造。
 - 不要声称自己能记住本次对话之外的事——访客会话不写入长期记忆。
@@ -76,11 +76,23 @@ ensureGuestWorkspace();
 const ALLOWED_TOOLS =
   process.env.ALLOWED_TOOLS ?? 'Read,Grep,Glob,WebSearch,WebFetch';
 // 非 owner（同事/群成员）不给本机文件工具，只允许联网检索
-const NON_OWNER_TOOLS = process.env.NON_OWNER_TOOLS ?? 'WebSearch,WebFetch';
-// 访客一律拉黑的工具（减法项，压过任何 allow 规则）
+const NON_OWNER_TOOLS = process.env.NON_OWNER_TOOLS ?? 'WebSearch';
+// 访客可用的内置工具**白名单**（--tools）。
+//
+// 必须是白名单而不是黑名单：--disallowedTools 只能挡住你想到的工具名，
+// 任何没列进去的内置工具照样可用。实测黑名单方案下访客手里仍有 22 个工具，
+// 包括 SendMessage / Artifact / CronCreate / Workflow / ListAgents —— 而且它们
+// 跑在 owner 的 Claude 账号身份下，等于访客能以 owner 身份发布网页、建定时任务、
+// 甚至把消息注入 owner 正在跑的高权限会话。换成白名单后工具数从 22 降到 2。
+// 白名单还天然面向未来：CLI 以后新增的内置工具不会自动对访客开放。
+// 默认不含 WebFetch：它对目标地址不做限制，访客可借它探测本机与内网
+// （实测 http://127.0.0.1:3000 会真的发起连接，错误信息即泄露端口可达性），
+// 也可把数据编码进 URL 外传。需要访客能读网页时用 GUEST_TOOLS 显式打开。
+const GUEST_TOOLS = process.env.GUEST_TOOLS ?? 'WebSearch';
+// 黑名单保留作双保险（万一将来白名单被放宽，这些依然被显式拒绝）
 const GUEST_DENIED_TOOLS =
   process.env.GUEST_DENIED_TOOLS ??
-  'Bash,BashOutput,KillShell,Edit,Write,NotebookEdit,Read,Glob,Grep,Task,Agent,Skill';
+  'Bash,BashOutput,KillShell,Edit,Write,NotebookEdit,Task,Agent,Skill,SendMessage,Artifact,CronCreate,CronDelete,CronList,Workflow,ListAgents,RemoteTrigger,PushNotification,ScheduleWakeup,TaskCreate,TaskUpdate,DesignSync,EnterWorktree,ExitWorktree,Monitor';
 // 空闲超时：只要 Claude 还在输出就不计时；静默超过该时长才判定卡死
 const CLAUDE_IDLE_TIMEOUT_MS = Number(process.env.CLAUDE_IDLE_TIMEOUT_MS || 600_000);
 // 绝对上限：无论多活跃，超过该时长也终止（兜底防失控）
@@ -351,12 +363,20 @@ export function buildClaudeArgs(chatId, isOwner = false, extraTools = [], opts =
     //   --setting-sources project  只读项目级配置，屏蔽用户级 allow 规则
     //   --strict-mcp-config        不加载用户级 MCP（Drive/Gmail/QuickBooks 等）
     //   --disallowedTools          显式拉黑，减法项，优先级高于任何 allow
-    args.push('--setting-sources', 'project');
+    // 不加载任何 settings 文件：user 级的 permissions.allow 是这次 CRITICAL 的根源，
+    // project 级同样可能被提交进仓库（谁都能加一条 allow 规则）
+    args.push('--setting-sources', '');
     args.push('--strict-mcp-config');
-    // 访客发了图片/文件时要能 Read 它——放行 Read，但路径由 allowedTools 限定
+    // 白名单：只有这些内置工具存在于访客的工具集里。
+    // 访客发了图片/文件时才追加 Read，且路径由 allowedTools 的 Read(./incoming/**) 限定。
+    const needsRead = extraTools.some((e) => e.startsWith('Read('));
+    const allowTools = GUEST_TOOLS.split(',').map((s) => s.trim()).filter(Boolean);
+    if (needsRead && !allowTools.includes('Read')) allowTools.push('Read');
+    args.push('--tools', allowTools.join(','));
+    // 双保险：白名单之外再显式拒绝一遍高危工具
     const denied = GUEST_DENIED_TOOLS.split(',')
       .map((s) => s.trim())
-      .filter((x) => x && !(x === 'Read' && extraTools.some((e) => e.startsWith('Read('))));
+      .filter((x) => x && !(x === 'Read' && needsRead));
     args.push('--disallowedTools', denied.join(','));
     // 自动记忆按 git 仓库根归档，workspace 与 workspace-guest 同属一个仓库，
     // 不关就是与 owner 共用一份（读方向泄漏、写方向是持久化提示注入）。
