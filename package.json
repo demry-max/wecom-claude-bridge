@@ -1,13 +1,13 @@
 {
   "name": "wecom-claude-bridge",
-  "version": "1.6.0",
+  "version": "2.0.0",
   "description": "",
   "main": "index.js",
   "directories": {
     "doc": "docs"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "node --test test/*.test.js",
     "start": "node src/index.js"
   },
   "keywords": [],

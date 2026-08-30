@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { XMLParser } from 'fast-xml-parser';
 import { getSignature, decrypt } from './wxcrypt.js';
-import { runClaude, resetSession, sessionInfo, WORKSPACE_DIR , getRuntimeConfig, setRuntimeConfig, MODEL_ALIASES, EFFORT_LEVELS, consumeMemoryNudge } from './claude.js';
+import { runClaude, resetSession, sessionInfo, WORKSPACE_DIR, GUEST_WORKSPACE_DIR, workspaceFor, outboxDirFor, shouldRecycleSession , getRuntimeConfig, setRuntimeConfig, MODEL_ALIASES, EFFORT_LEVELS, consumeMemoryNudge } from './claude.js';
 import { loadOwner, saveOwner } from './store.js';
 import { startScheduler } from './scheduler.js';
 
@@ -82,6 +82,27 @@ function isDuplicate(id) {
   if (seen.size > 1000) for (const k of seen) { seen.delete(k); if (seen.size <= 500) break; }
   return false;
 }
+// 进程级兜底：宁可重启，也不要带病静默运行
+// 退避退出：裸 exit 配进程管理器的重启节流会变成高频重启风暴
+let exiting = false;
+function bailOut(reason, delayMs = 0) {
+  if (exiting) return;
+  exiting = true;
+  console.error(`[exit] ${reason}`);
+  setTimeout(() => process.exit(1), delayMs).unref();
+}
+
+process.on('uncaughtException', (e) => {
+  console.error('[fatal] uncaughtException:', e?.stack ?? e);
+  bailOut('uncaughtException', 2000);
+});
+process.on('unhandledRejection', (e) => {
+  console.error('[fatal] unhandledRejection:', e?.stack ?? e);
+});
+
+// owner 身份的权威来源：配了它，owner 记录丢失也能直接恢复，无需认领流程
+const OWNER_USER_ID = (process.env.OWNER_USER_ID ?? '').trim();
+
 const chatQueues = new Map();
 function enqueue(chatId, task) {
   const next = (chatQueues.get(chatId) ?? Promise.resolve()).then(task).catch((e) => console.error('[queue]', e));
@@ -127,15 +148,32 @@ async function handleMessage(m) {
   if (isDuplicate(m.MsgId)) return;
   const chatId = userId; // 自建应用消息均为单聊
 
-  let owner = loadOwner();
+  let owner = OWNER_USER_ID || loadOwner();
   if (!owner) {
+    // 收紧自动认领：owner.json 一旦丢失（盘故障、误删、恢复旧备份），
+    // 下一个私聊机器人的人就会继承全量本机工具。需显式开启才允许重新认领。
+    if (process.env.ALLOW_OWNER_CLAIM !== 'true') {
+      console.error(
+        `[owner] owner.json 缺失且未开放认领。确需重新认领请在 .env 设 ALLOW_OWNER_CLAIM=true 后重启。当前请求者：${userId}`
+      );
+      await send(userId, '⚠️ 机器人的 owner 记录缺失，出于安全未自动认领。请在主机上恢复 data/owner.json 或按日志提示配置后重启。');
+      return;
+    }
     owner = userId;
-    saveOwner(owner);
+    if (!saveOwner(owner)) {
+      // 写盘失败却回复「已登记」，会让真正的 owner 之后被静默降级为访客
+      await send(userId, '⚠️ owner 记录写入失败（磁盘不可写），未完成登记。请检查主机磁盘后重试。');
+      return;
+    }
     console.log(`[owner] 已锁定 owner userid = ${owner}`);
     await send(userId, `✅ 已将你登记为本机器人 owner。\n直接发消息即可对话；发送 /new 开启新会话，/status 查看会话状态。`);
     return;
   }
   const isOwner = userId === owner;
+
+  // 会话键区分身份：owner 与访客的 cwd 不同（workspace vs workspace-guest），
+  // 共用 session 会让访客通过 --resume 恢复出 owner 那条带私有记忆的会话
+  const sessionKey = isOwner ? chatId : `guest:${chatId}`;
 
   let built;
   try {
@@ -153,12 +191,12 @@ async function handleMessage(m) {
   if (!text) return;
 
   if (text === '/new') {
-    resetSession(chatId);
+    resetSession(sessionKey);
     await send(userId, '🆕 已重置，下一条消息将开启全新 Claude 会话。');
     return;
   }
   if (text === '/status') {
-    await send(userId, sessionInfo(chatId, isOwner));
+    await send(userId, sessionInfo(sessionKey, isOwner));
     return;
   }
 
@@ -173,10 +211,10 @@ async function handleMessage(m) {
       '没有就忽略本提示，正常回答用户的问题。不要因为这条提示改变回答的语气或结构。）';
   }
 
-  enqueue(chatId, async () => {
+  enqueue(sessionKey, async () => {
     console.log(`[msg] ${isOwner ? 'owner' : userId} [${m.MsgType}]: ${text.slice(0, 80)}`);
     try {
-      const answer = await runClaude(chatId, prompt, isOwner, extraTools);
+      const answer = await runClaude(sessionKey, prompt, isOwner, extraTools);
       await send(userId, answer || '（Claude 返回了空回复）');
     } catch (e) {
       console.error('[claude]', e);
@@ -251,7 +289,7 @@ startScheduler({
       try {
         const next = setRuntimeConfig({ model: job.model, effort: job.effort });
         console.log(`[sched] 已切换模型 → ${next.model} / ${next.effort}`);
-        if (touser) await send(chatId, `🔀 ${job.name ?? '定时切换'}：模型 ${next.model || 'CLI 默认'}，思考深度 ${next.effort || 'CLI 默认'}`);
+        if (touser) await send(touser, `🔀 ${job.name ?? '定时切换'}：模型 ${next.model || 'CLI 默认'}，思考深度 ${next.effort || 'CLI 默认'}`);
       } catch (e) {
         console.error('[sched] 切换模型失败:', e?.message ?? e);
       }
@@ -265,7 +303,13 @@ startScheduler({
     const answer = await runClaude(`sched:${job._file}`, job.prompt, true, [], (p) =>
       send(touser, `⏳ ${p}`)
     );
-    await send(touser, `⏰ ${job.name ?? '定时任务'}\n\n${answer || '（无输出）'}`);
+    // 无事不报：巡检类任务返回 HEARTBEAT_OK 时静默跳过
+    const body = (answer ?? '').trim();
+        if (!body || /^HEARTBEAT_OK[.。!！]?$/i.test(body)) {
+      console.log(`[sched] 「${job.name ?? job._file}」无需汇报，静默跳过`);
+    } else {
+      await send(touser, `⏰ ${job.name ?? '定时任务'}\n\n${answer || '（无输出）'}`);
+    }
   },
 });
 

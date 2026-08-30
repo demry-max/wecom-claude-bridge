@@ -9,3 +9,9 @@ workspace/memory/*
 bridge.log
 ._*
 .DS_Store
+.env.*
+!.env.example
+*.bak
+*.bak.*
+workspace-guest/
+test-results/

@@ -14,6 +14,13 @@ import path from 'node:path';
 import { CronExpressionParser } from 'cron-parser';
 
 const TICK_MS = 30_000;
+// 迟到窗口：错过的任务只在这个窗口内补跑。机器休眠一夜后醒来，
+// 不该把昨天的晨报、已经过期的模型切换全部倒着补一遍。
+const MAX_LATE_MS = Number(process.env.SCHED_MAX_LATE_MS ?? 2 * 60 * 60 * 1000);
+
+// action 型任务只允许这些动作——任务定义由机器人自己写，
+// 而机器人可能被聊天内容注入，所以这里按白名单严格枚举，未知 action 一律拒绝执行。
+const ALLOWED_ACTIONS = new Set(['set-model']);
 
 function readJobs(dir) {
   if (!fs.existsSync(dir)) return [];
@@ -23,8 +30,13 @@ function readJobs(dir) {
     try {
       const job = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
       job._file = f;
+      if (job.enabled === false || !job.when) continue;
+      if (job.action && !ALLOWED_ACTIONS.has(job.action)) {
+        console.error(`[sched] 拒绝未知 action「${job.action}」(${f})，已跳过`);
+        continue;
+      }
       // prompt 型（跑 Claude）或 action 型（如切模型）任一即可
-      if (job.enabled !== false && job.when && (job.prompt || job.action)) jobs.push(job);
+      if (job.prompt || job.action) jobs.push(job);
     } catch (e) {
       console.error(`[sched] 任务文件解析失败 ${f}:`, e?.message ?? e);
     }
@@ -34,7 +46,11 @@ function readJobs(dir) {
 
 // 一次性任务：when 是 ISO 时间（无空格）；cron 任务：五段表达式（含空格）
 function isOneShot(job) {
-  return !String(job.when).trim().includes(' ');
+  const w = String(job.when).trim();
+  // cron 宏（@daily/@weekly/@hourly…）不含空格，但绝不是一次性时间——
+  // 早先按「无空格即一次性」判定，会把它们当成非法日期而静默永不触发
+  if (w.startsWith('@')) return false;
+  return !w.includes(' ');
 }
 
 // 返回 <= now 的最近一次应触发时间；不该触发则返回 null
@@ -69,56 +85,110 @@ export function startScheduler({ schedulesDir, stateFile, onFire }) {
   const saveState = (s) => {
     try {
       fs.mkdirSync(path.dirname(stateFile), { recursive: true });
-      fs.writeFileSync(stateFile, JSON.stringify(s, null, 2));
+      const tmp = `${stateFile}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(s, null, 2));
+      fs.renameSync(tmp, stateFile);
     } catch (e) {
       console.error('[sched] 状态写入失败:', e?.message ?? e);
     }
   };
 
+  // 每次只改自己那个 key 再落盘，绝不整份覆盖：
+  // onFire 是分钟级的，期间别的任务可能已经写过状态，用开局的旧快照全量覆盖会把它们抹掉
+  const markFired = (file, iso, extra = {}) => {
+    const cur = loadState();
+    cur[file] = { at: iso, ...extra };
+    saveState(cur);
+  };
+
+  // 锁到「任务」而不是「整轮 tick」：全局闸会让一个跑几十分钟的周报
+  // 把同期到点的任务一直挡在门外，直到它们超过迟到窗口被永久跳过。
+  const inflight = new Set();
+  const MAX_CONCURRENT = Number(process.env.SCHED_MAX_CONCURRENT ?? 2);
+  let scanning = false;
   const tick = async () => {
-    const now = new Date();
-    const s = loadState();
-    for (const job of readJobs(schedulesDir)) {
-      const due = lastDueAt(job, now);
-      if (!due) continue;
-      const seen = Object.prototype.hasOwnProperty.call(s, job._file);
-      const last = seen ? new Date(s[job._file]) : null;
+    if (scanning) return; // 仅防止扫描本身重入；执行是异步的
+    scanning = true;
+    try {
+      const now = new Date();
+      const s = loadState();
+      const pending = [];
+      for (const job of readJobs(schedulesDir)) {
+        if (inflight.has(job._file)) continue; // 上一轮还没跑完
+        const due = lastDueAt(job, now);
+        if (!due) continue;
+        // 状态里连 when 一起记：改了触发时间就重新登记基线，
+        // 否则编辑任务的那一刻会立刻补跑上一个时间点（"改期即补跑"）
+        const rec = s[job._file];
+        const prev = typeof rec === 'string' ? { at: rec, when: job.when } : (rec ?? null);
+        const seen = prev !== null && prev.when === job.when;
+        const last = seen && prev.at ? new Date(prev.at) : null;
 
-      // cron 任务首次被发现时只记基线、不补跑历史时间点
-      // （否则中午建的「每天 9 点」会立刻触发一次）
-      if (!seen && !isOneShot(job)) {
-        s[job._file] = due.toISOString();
-        saveState(s);
-        console.log(`[sched] 已登记「${job.name ?? job._file}」(${job.when})，下次到点触发`);
-        continue;
-      }
-      if (last && due <= last) continue; // 这一次已经跑过
-
-      s[job._file] = due.toISOString();
-      saveState(s);
-      console.log(`[sched] 触发「${job.name ?? job._file}」(${due.toLocaleString('zh-CN')})`);
-      try {
-        await onFire(job);
-      } catch (e) {
-        console.error(`[sched] 执行失败 ${job._file}:`, e?.message ?? e);
-      }
-
-      // 一次性任务跑完即停用，避免重复
-      if (isOneShot(job)) {
-        try {
-          const p = path.join(schedulesDir, job._file);
-          const raw = JSON.parse(fs.readFileSync(p, 'utf8'));
-          raw.enabled = false;
-          raw.last_run = due.toISOString();
-          fs.writeFileSync(p, JSON.stringify(raw, null, 2));
-        } catch (e) {
-          console.error('[sched] 停用一次性任务失败:', e?.message ?? e);
+        // cron 任务首次被发现时只记基线、不补跑历史时间点
+        // （否则中午建的「每天 9 点」会立刻触发一次）
+        if (!seen && !isOneShot(job)) {
+          markFired(job._file, due.toISOString(), { when: job.when, status: 'baseline' });
+          console.log(`[sched] 已登记「${job.name ?? job._file}」(${job.when})，下次到点触发`);
+          continue;
         }
+        if (last && due <= last) continue; // 这一次已经跑过
+
+        // 迟到太久就放弃：关机一夜后醒来不该把昨天的任务倒着补一遍
+        const lateMs = Date.now() - due.getTime();
+        if (lateMs > MAX_LATE_MS) {
+          markFired(job._file, due.toISOString(), { when: job.when, status: 'skipped-late' });
+          console.log(
+            `[sched] 跳过「${job.name ?? job._file}」：应于 ${due.toLocaleString('zh-CN')} 触发，已迟到 ${Math.round(lateMs / 60000)} 分钟（超过 ${Math.round(MAX_LATE_MS / 60000)} 分钟窗口）`
+          );
+          continue;
+        }
+
+        // 先占位防重复触发，跑完再落「已完成」；中途崩溃时留下 running 痕迹便于排查
+        markFired(job._file, due.toISOString(), { when: job.when, status: 'running' });
+        const lateNote = lateMs > 5 * 60_000 ? `（迟到补跑 ${Math.round(lateMs / 60000)} 分钟）` : '';
+        console.log(`[sched] 触发「${job.name ?? job._file}」(${due.toLocaleString('zh-CN')})${lateNote}`);
+        if (inflight.size >= MAX_CONCURRENT) {
+          console.log(`[sched] 并发已满（${MAX_CONCURRENT}），「${job.name ?? job._file}」下一轮再试`);
+          continue;
+        }
+        inflight.add(job._file);
+        const runOne = (async () => {
+          try {
+            await onFire({ ...job, _late: lateMs > 5 * 60_000 ? lateMs : 0 });
+            markFired(job._file, due.toISOString(), { when: job.when, status: 'done' });
+          } catch (e) {
+            console.error(`[sched] 执行失败 ${job._file}:`, e?.message ?? e);
+            markFired(job._file, due.toISOString(), { when: job.when, status: 'failed' });
+          } finally {
+            inflight.delete(job._file);
+            // 一次性任务跑完即停用，避免重复
+            if (isOneShot(job)) {
+              try {
+                const fp = path.join(schedulesDir, job._file);
+                const raw = JSON.parse(fs.readFileSync(fp, 'utf8'));
+                raw.enabled = false;
+                raw.last_run = due.toISOString();
+                const tmp = `${fp}.tmp`;
+                fs.writeFileSync(tmp, JSON.stringify(raw, null, 2));
+                fs.renameSync(tmp, fp);
+              } catch (e) {
+                console.error('[sched] 停用一次性任务失败:', e?.message ?? e);
+              }
+            }
+          }
+        })();
+        pending.push(runOne);
       }
+      // 等本轮派发出去的任务收束，便于测试确定性；生产里它们本来就是并发的
+      await Promise.allSettled(pending);
+    } finally {
+      scanning = false;
     }
   };
 
-  setInterval(() => tick().catch((e) => console.error('[sched]', e)), TICK_MS);
-  tick().catch((e) => console.error('[sched]', e));
+  const timer = setInterval(() => tick().catch((e) => console.error('[sched]', e)), TICK_MS);
+  const first = tick().catch((e) => console.error('[sched]', e));
   console.log(`定时任务调度器已启动（每 ${TICK_MS / 1000}s 检查一次）：${schedulesDir}`);
+  // 返回停止句柄：测试用它收尾，生产侧不调用即可（进程由长连接保持存活）
+  return { stop: () => clearInterval(timer), whenIdle: () => first };
 }

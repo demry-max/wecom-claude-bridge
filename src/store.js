@@ -17,12 +17,34 @@ function readJson(file, fallback) {
   }
 }
 
+/**
+ * 原子写 + 永不抛出。
+ * 这些写调用发生在事件回调里（如 readline 的 'line'），一旦抛出就是 uncaughtException，
+ * 整个桥接进程当场死亡、正在跑的答案一并丢失——而外置盘瞬断、TCC 授权失效、盘满
+ * 在本项目都是有前科的常规故障。状态写失败远没有进程死掉严重，记日志降级即可。
+ */
+function writeJsonSafe(file, data) {
+  const tmp = `${file}.tmp`;
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+    fs.renameSync(tmp, file);
+    return true;
+  } catch (e) {
+    console.error(`[store] 写入 ${path.basename(file)} 失败:`, e?.message ?? e);
+    try { fs.rmSync(tmp, { force: true }); } catch {}
+    return false;
+  }
+}
+
 export function loadOwner() {
-  return readJson(OWNER_FILE, {}).open_id ?? null;
+  // owner.json 内容为 "null" 时 readJson 会返回 null，直接取属性会抛——
+  // 而它在每条消息路径上被调用，抛一次就是整个进程死一次
+  const d = readJson(OWNER_FILE, {});
+  return (d && typeof d === 'object' ? d.open_id : null) ?? null;
 }
 
 export function saveOwner(openId) {
-  fs.writeFileSync(OWNER_FILE, JSON.stringify({ open_id: openId }, null, 2));
+  return writeJsonSafe(OWNER_FILE, { open_id: openId });
 }
 
 export function loadSessions() {
@@ -30,5 +52,5 @@ export function loadSessions() {
 }
 
 export function saveSessions(sessions) {
-  fs.writeFileSync(SESSIONS_FILE, JSON.stringify(sessions, null, 2));
+  return writeJsonSafe(SESSIONS_FILE, sessions);
 }
