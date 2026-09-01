@@ -2,6 +2,17 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.0.3] - 2026-09-02
+
+### 变更
+
+- **`fable` 别名默认指向 Claude Fable 5.1**（`claude-fable-5-1`）。
+  `/model fable`、定时任务的 `model` 字段、`.env` 的 `CLAUDE_MODEL` 三条路径一致生效。
+  - 需要 **Claude Code CLI ≥ 2.1.251**；旧版会报 `does not support this model`，
+    跑 `claude update` 升级即可。
+  - 想留在上一代用 `fable5`（→ `claude-fable-5`）；`fable5.1` 与 `fable` 等价。
+  - 注意完整 ID 是 `claude-fable-5-1`，写成 `claude-fable-5.1` 是无效的。
+
 ## [2.0.2] - 2026-08-30
 
 验收报告里剩余的中低优先级问题一次清完。无破坏性变更。

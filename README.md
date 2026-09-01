@@ -1,6 +1,6 @@
 # wecom-claude-bridge
 
-[![version](https://img.shields.io/badge/version-2.0.2-blue)](CHANGELOG.md) [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![version](https://img.shields.io/badge/version-2.0.3-blue)](CHANGELOG.md) [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 **把 Claude Code 接进企业微信** —— 在企业微信里给自建应用发消息，让 Claude 回答问题、看图片、读文件，并保持上下文连续。
 
