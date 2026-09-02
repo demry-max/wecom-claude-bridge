@@ -73,6 +73,37 @@ async function downloadMedia(mediaId, dest) {
   return dest;
 }
 
+
+// 瞬时网络故障：附件下载是幂等的，抖一下就该自己重试，
+// 而不是把 EHOSTUNREACH 变成用户面前的一句「处理失败」
+const TRANSIENT = /EHOSTUNREACH|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|EPIPE|socket hang up|network|timeout/i;
+function isTransientNetworkError(e) {
+  return TRANSIENT.test(String(e?.code ?? e?.errno ?? '')) || TRANSIENT.test(String(e?.message ?? ''));
+}
+async function withRetry(label, fn, attempts = 2) {
+  for (let i = 0; ; i++) {
+    try { return await fn(); } catch (e) {
+      if (i >= attempts || !isTransientNetworkError(e)) throw e;
+      const wait = [1000, 3000][i] ?? 3000;
+      console.log(`[${label}] 网络失败（${e?.code ?? e?.message}），${wait / 1000}s 后重试`);
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
+}
+// 平台 SDK 的错误常常 message 为空，直接 ?? 出来是一片空白
+function describeError(e) {
+  const code = e?.code ?? e?.errno;
+  const status = e?.response?.status;
+  const msg = String(e?.message ?? '').trim();
+  if (isTransientNetworkError(e)) {
+    return `网络暂时不可达（${code || msg || '连接失败'}）\n这通常是临时的，请重发一次。`;
+  }
+  if (status === 401 || status === 403) {
+    return `接口返回权限错误（HTTP ${status}）\n若是图片/文件，请确认应用已开通素材下载权限并发布版本。`;
+  }
+  return msg || String(code || e).slice(0, 200) || '未知错误';
+}
+
 // ---- 去重 + 串行队列 ----
 const seen = new Set();
 function isDuplicate(id) {
@@ -180,7 +211,7 @@ async function handleMessage(m) {
     built = await buildPrompt(m);
   } catch (e) {
     console.error('[buildPrompt]', e);
-    await send(userId, `⚠️ 处理该消息失败：${e?.message ?? e}`);
+    await send(userId, `⚠️ 处理该消息失败：${describeError(e)}`);
     return;
   }
   if (built.unsupported) {
