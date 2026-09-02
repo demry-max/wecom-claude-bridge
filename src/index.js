@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { XMLParser } from 'fast-xml-parser';
 import { getSignature, decrypt } from './wxcrypt.js';
-import { runClaude, resetSession, sessionInfo, WORKSPACE_DIR, GUEST_WORKSPACE_DIR, workspaceFor, outboxDirFor, shouldRecycleSession , getRuntimeConfig, setRuntimeConfig, MODEL_ALIASES, EFFORT_LEVELS, consumeMemoryNudge } from './claude.js';
+import { runClaude, checkCliEnvironment, resetSession, sessionInfo, WORKSPACE_DIR, GUEST_WORKSPACE_DIR, workspaceFor, outboxDirFor, shouldRecycleSession , getRuntimeConfig, setRuntimeConfig, MODEL_ALIASES, EFFORT_LEVELS, consumeMemoryNudge } from './claude.js';
 import { loadOwner, saveOwner } from './store.js';
 import { startScheduler } from './scheduler.js';
 
@@ -328,6 +328,9 @@ startScheduler({
       } catch { return false; }
     });
   console.log(`[config] 生效配置：模型=${cfg.model || 'CLI 默认'} 思考档=${cfg.effort || 'CLI 默认'}`);
+  const cli = checkCliEnvironment(cfg.model);
+  console.log(`[config] claude CLI：${cli.bin} (${cli.version ?? '版本未知'})`);
+  if (cli.problem) console.error(`[config] ⚠️ ${cli.problem}`);
   if (shadowed.length) {
     console.error(`[config] ⚠️ 以下变量被 shell 环境覆盖，.env 里的值未生效：${shadowed.join(', ')}`);
   }

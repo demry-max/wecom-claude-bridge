@@ -308,3 +308,47 @@ describe('调度器并发（行为断言）', () => {
     fs.rmSync(env.dir, { recursive: true, force: true });
   });
 });
+
+describe('CLI 环境自检（行为断言）', () => {
+  // 2026-09-02：本机装了两份 claude，升级了 shell 里那份，而 launchd 的 PATH
+  // 用的是另一份，切换模型后每条消息都报 400。自检要在启动时就抓到这件事。
+  const stub = (version) => {
+    const f = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'cli-')), 'claude');
+    fs.writeFileSync(f, `#!/bin/bash
+[ "$1" = "--version" ] && echo "${version} (Claude Code)" && exit 0
+exit 1
+`);
+    fs.chmodSync(f, 0o755);
+    return f;
+  };
+  const withBin = async (bin, fn) => {
+    const prev = process.env.CLAUDE_BIN;
+    process.env.CLAUDE_BIN = bin;
+    const mod = await import(`../src/claude.js?cli=${Math.random()}`);
+    try { return fn(mod); } finally {
+      if (prev === undefined) delete process.env.CLAUDE_BIN; else process.env.CLAUDE_BIN = prev;
+    }
+  };
+
+  test('CLI 版本不足以跑当前模型时报出问题，并指明是哪个路径下的那份', async () => {
+    const bin = stub('2.1.235');
+    const r = await withBin(bin, (m) => m.checkCliEnvironment('claude-fable-5-1'));
+    assert.equal(r.ok, false);
+    assert.match(r.problem, /2\.1\.251/, '要说清需要的版本');
+    assert.match(r.problem, /2\.1\.235/, '要说清当前版本');
+    assert.ok(r.problem.includes(bin) || r.bin.includes('claude'), '要指明实际解析到的那个可执行文件');
+  });
+
+  test('同一个旧 CLI 跑不要求新版的模型时不误报', async () => {
+    const r = await withBin(stub('2.1.235'), (m) => m.checkCliEnvironment('claude-fable-5'));
+    assert.equal(r.ok, true);
+    assert.equal(r.problem, null);
+  });
+
+  test('claude 不存在时报出可执行文件问题而不是崩溃', async () => {
+    const r = await withBin('/tmp/definitely-not-a-real-claude-binary', (m) =>
+      m.checkCliEnvironment('claude-fable-5-1'));
+    assert.equal(r.ok, false);
+    assert.match(r.problem, /找不到可执行的 claude|PATH/);
+  });
+});

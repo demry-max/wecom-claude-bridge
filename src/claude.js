@@ -152,6 +152,61 @@ export function normalizeEffort(v) {
   return e;
 }
 
+// 模型对 CLI 版本的最低要求。写在这里而不是靠试错，是因为版本不够时
+// 报错发生在**用户发消息那一刻**，而不是启动时——桥接看着一切正常，人却收到 400。
+const MODEL_MIN_CLI = [
+  { re: /^claude-fable-5-1/, min: '2.1.251' },
+];
+
+const cmpVer = (a, b) => {
+  const pa = String(a).split('.').map(Number);
+  const pb = String(b).split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    if ((pa[i] ?? 0) !== (pb[i] ?? 0)) return (pa[i] ?? 0) - (pb[i] ?? 0);
+  }
+  return 0;
+};
+
+/**
+ * 启动自检：确认桥接实际会调用的那个 claude 可用、版本够跑当前模型。
+ *
+ * 关键在于「实际会调用的那个」——本机可能装了多份 claude（nvm 一份、homebrew 一份），
+ * 而子进程按 PATH 顺序解析。2026-09-02 就踩过：升级了 shell 里那份，
+ * 而 launchd 的 PATH 把另一份排在前面，模型切换后每条消息都报 400。
+ * 返回 { bin, version, ok, problem }，由调用方决定怎么告警。
+ */
+export function checkCliEnvironment(model = CLAUDE_MODEL) {
+  const res = { bin: CLAUDE_BIN, version: null, ok: false, problem: null };
+  try {
+    const out = spawn.sync(CLAUDE_BIN, ['--version'], { encoding: 'utf8', env: process.env });
+    if (out.error) {
+      res.problem = `找不到可执行的 claude（PATH=${process.env.PATH}）：${out.error.message}`;
+      return res;
+    }
+    // 记录解析到的真实路径，多份安装时一眼看出用的是哪个
+    const which = spawn.sync(process.platform === 'win32' ? 'where' : 'which',
+      [CLAUDE_BIN], { encoding: 'utf8', env: process.env });
+    if (which.stdout) res.bin = which.stdout.trim().split('\n')[0];
+    res.version = (String(out.stdout ?? '').match(/(\d+\.\d+\.\d+)/) ?? [])[1] ?? null;
+    if (!res.version) {
+      res.problem = `无法解析 claude 版本：${String(out.stdout ?? out.stderr ?? '').slice(0, 120)}`;
+      return res;
+    }
+    const need = MODEL_MIN_CLI.find((m) => m.re.test(model ?? ''));
+    if (need && cmpVer(res.version, need.min) < 0) {
+      res.problem =
+        `模型 ${model} 需要 Claude Code ≥ ${need.min}，但 ${res.bin} 是 ${res.version}。` +
+        `请升级该路径下的 claude（注意本机可能装了多份，PATH 里靠前的那份才生效），或改用其他模型。`;
+      return res;
+    }
+    res.ok = true;
+    return res;
+  } catch (e) {
+    res.problem = `CLI 自检失败：${e?.message ?? e}`;
+    return res;
+  }
+}
+
 export function getRuntimeConfig() {
   return { model: CLAUDE_MODEL, effort: CLAUDE_EFFORT };
 }
@@ -295,6 +350,10 @@ export function sessionInfo(chatId, isOwner = false) {
     `- 工作目录: \`${workspaceFor(isOwner)}\``,
     `- 你的身份: ${isOwner ? 'owner' : '普通成员'}`,
     `- 模型: ${CLAUDE_MODEL || '（CLI 默认）'}`,
+    (() => {
+      const cli = checkCliEnvironment();
+      return `- CLI: ${cli.version ?? '未知'} @ ${cli.bin}${cli.problem ? ' ⚠️ ' + cli.problem : ''}`;
+    })(),
     `- 思考深度: ${CLAUDE_EFFORT || '（CLI 默认）'}`,
     `- 上下文: ${(contextSize.get(chatId) ?? 0).toLocaleString()} tokens${CONTEXT_NUDGE_TOKENS > 0 ? ` / 固化提醒阈值 ${CONTEXT_NUDGE_TOKENS.toLocaleString()}` : ''}`,
     `- 允许工具: ${tools || '（无）'}`,
